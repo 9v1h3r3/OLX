@@ -9,7 +9,7 @@ from flask import Flask
 from playwright.async_api import async_playwright
 
 # ===========================================
-# CONFIG
+# CONFIGURATION
 # ===========================================
 COOKIE_FILE = "cookies.json"
 TARGETS_FILE = "targets.txt"
@@ -19,29 +19,27 @@ PREFIX_FILE = "prefix.txt"
 HEADLESS = True
 BROWSER_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
 
-DELAY_MIN = 3
-DELAY_MAX = 5
+DELAY_MIN = 3.0
+DELAY_MAX = 5.0
 
 SELF_URL = os.environ.get("SELF_URL")  # e.g. https://your-app.onrender.com/
-RELOAD_INTERVAL = 3600  # reload data every hour
-WATCHDOG_INTERVAL = 60  # supervisor health check every 60s
-RESTART_DELAY = 5       # seconds between auto restarts on crash
+PING_INTERVAL = 300     # 5 min self ping
+RELOAD_INTERVAL = 3600  # 1 hour data reload
+RESTART_DELAY = 5       # seconds between restart on crash
 
 # ===========================================
 app = Flask(__name__)
-state = {"running": False, "last_error": None, "sent": 0, "last_reload": 0}
+state = {"sent": 0, "errors": 0, "last_reload": 0}
 
 
 @app.route("/")
 def home():
-    return "✅ 365-Day Messenger Bot active!"
+    return f"✅ Messenger Bot active — sent={state['sent']}, errors={state['errors']}"
 
 
 # ===========================================
-async def run_bot_once():
-    """Main send loop — runs once, supervisor will restart."""
-    print("[+] Starting Playwright bot loop…")
-
+async def send_messages():
+    """Main bot loop that loads cookies, targets, and sends messages."""
     # Load data
     with open(COOKIE_FILE, "r", encoding="utf-8") as f:
         cookies = [c for c in json.load(f) if "name" in c and "value" in c]
@@ -65,8 +63,8 @@ async def run_bot_once():
         for tid in targets:
             try:
                 url = f"https://www.facebook.com/messages/e2ee/t/{tid}"
-                print(f"\n[💬] Opening chat {tid}")
-                await page.goto(url)
+                print(f"\n[💬] Opening chat with {tid}")
+                await page.goto(url, timeout=60000)
                 await page.wait_for_load_state("domcontentloaded")
                 await asyncio.sleep(2)
 
@@ -75,7 +73,7 @@ async def run_bot_once():
                     try:
                         input_box = await page.query_selector('div[contenteditable="true"]')
                         if not input_box:
-                            raise Exception("No input box")
+                            raise Exception("Message box not found")
                         await input_box.click()
                         await input_box.fill(full_msg)
                         await input_box.press("Enter")
@@ -83,61 +81,59 @@ async def run_bot_once():
                         state["sent"] += 1
                         await asyncio.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
                     except Exception as e:
-                        print(f"[x] Message error: {e}")
+                        print(f"[x] Send error: {e}")
+                        state["errors"] += 1
                         await asyncio.sleep(1)
             except Exception as e:
-                print(f"[!] Thread error for {tid}: {e}")
+                print(f"[!] Error in thread {tid}: {e}")
+                state["errors"] += 1
 
         await browser.close()
-        print("\n✅ Loop complete (will auto-restart).")
+        print("✅ Message cycle completed.")
 
 
 # ===========================================
-async def supervisor_loop():
-    """Keeps bot alive 24/7, restarts on crash, reloads files hourly."""
+async def forever_loop():
+    """Keeps bot running forever, restarts automatically."""
     while True:
         try:
-            # Reload data hourly
             now = time.time()
             if now - state["last_reload"] > RELOAD_INTERVAL:
-                print("[♻️] Reloading data files…")
+                print("[♻️] Reloading data files...")
                 state["last_reload"] = now
 
-            state["running"] = True
-            await run_bot_once()
-            print("[⏳] Restarting main loop after short delay…")
+            await send_messages()
+            print("[⏳] Restarting send loop...")
             await asyncio.sleep(RESTART_DELAY)
 
         except Exception as e:
-            state["last_error"] = str(e)
-            print(f"[💥] Bot crashed: {e}")
-            print(f"[♻️] Restarting in {RESTART_DELAY}s…")
+            print(f"[💥] Fatal error: {e}")
+            state["errors"] += 1
+            print(f"[♻️] Restarting in {RESTART_DELAY}s...")
             await asyncio.sleep(RESTART_DELAY)
 
 
-def async_thread_runner():
-    asyncio.run(supervisor_loop())
+def async_runner():
+    asyncio.run(forever_loop())
 
 
 # ===========================================
-def watchdog_thread():
-    """Self-ping + health monitor for 365-day uptime."""
+def self_ping():
+    """Prevents Render/Replit from sleeping by pinging itself periodically."""
     while True:
-        try:
-            if SELF_URL:
+        if SELF_URL:
+            try:
                 requests.get(SELF_URL, timeout=10)
-                print("[🩺] Pinged self to keep alive.")
-        except Exception:
-            pass
-        time.sleep(WATCHDOG_INTERVAL)
+                print("[🔁] Pinged self for uptime.")
+            except Exception:
+                pass
+        time.sleep(PING_INTERVAL)
 
 
 # ===========================================
 if __name__ == "__main__":
-    # Start background bot & watchdog
-    threading.Thread(target=async_thread_runner, daemon=True).start()
-    threading.Thread(target=watchdog_thread, daemon=True).start()
+    threading.Thread(target=async_runner, daemon=True).start()
+    threading.Thread(target=self_ping, daemon=True).start()
 
-    # Flask server (for Render uptime)
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
