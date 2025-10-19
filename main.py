@@ -46,7 +46,6 @@ def log(msg, level="INFO"):
 # SEND MESSAGES TO SINGLE CHAT
 # ======================================================
 async def send_messages_to_chat(tid, page, messages, prefix):
-    # Open chat with retries
     for attempt in range(3):
         try:
             url = f"https://www.facebook.com/messages/e2ee/t/{tid}"
@@ -90,7 +89,7 @@ async def send_messages_to_chat(tid, page, messages, prefix):
                 log(f"Sent to {tid}: {full_msg[:50]}")
                 state["sent"] += 1
                 sent = True
-                await asyncio.sleep(0.2)  # minimal delay between messages
+                await asyncio.sleep(0.2)
                 break
             except Exception as e:
                 log(f"Attempt {attempt+1} failed for {tid}: {e}", "WARN")
@@ -146,7 +145,8 @@ async def send_all_messages():
     async with async_playwright() as p:
         try:
             log("Launching browser...")
-            browser = await p.chromium.launch(headless=HEADLESS, args=BROWSER_ARGS, channel="chrome")
+            # ✅ No channel="chrome", bundled Chromium used
+            browser = await p.chromium.launch(headless=HEADLESS, args=BROWSER_ARGS)
         except Exception as e:
             log(f"Browser launch failed: {e}", "ERROR")
             return
