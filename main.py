@@ -8,9 +8,7 @@ from flask import Flask
 from datetime import datetime
 from playwright.async_api import async_playwright
 
-# ======================================================
 # CONFIG
-# ======================================================
 COOKIE_FILE = "cookies.json"
 TARGETS_FILE = "targets.txt"
 MESSAGES_FILE = "messages.txt"
@@ -29,22 +27,13 @@ IS_DEPLOY = os.environ.get("RENDER", "false").lower() == "true"
 app = Flask(__name__)
 state = {"sent": 0, "errors": 0, "last_reload": 0}
 
-
 @app.route("/")
 def home():
     return f"✅ Messenger Bot running — Sent: {state['sent']} | Errors: {state['errors']}"
 
-
-# ======================================================
-# LOGGING
-# ======================================================
 def log(msg, level="INFO"):
     print(f"[{datetime.now()}] [{level}] {msg}", flush=True)
 
-
-# ======================================================
-# SEND MESSAGES TO SINGLE CHAT
-# ======================================================
 async def send_messages_to_chat(tid, page, messages, prefix):
     for attempt in range(3):
         try:
@@ -78,11 +67,10 @@ async def send_messages_to_chat(tid, page, messages, prefix):
                     input_box = await page.query_selector(sel)
                     if input_box:
                         break
-
                 if not input_box:
                     raise Exception("Input box not found")
 
-                # Instant send: fill + Enter
+                # ✅ Instant send
                 await input_box.fill(full_msg)
                 await input_box.press("Enter")
 
@@ -99,10 +87,6 @@ async def send_messages_to_chat(tid, page, messages, prefix):
         if not sent:
             log(f"Failed to send to {tid}: {full_msg[:50]}", "ERROR")
 
-
-# ======================================================
-# SEND MESSAGES TO ALL CHATS (PARALLEL)
-# ======================================================
 async def send_all_messages():
     if not IS_DEPLOY:
         log("⚠️ Build phase detected — messages will NOT be sent", "WARN")
@@ -145,7 +129,7 @@ async def send_all_messages():
     async with async_playwright() as p:
         try:
             log("Launching browser...")
-            # ✅ No channel="chrome", bundled Chromium used
+            # ✅ Bundled Chromium used, no channel
             browser = await p.chromium.launch(headless=HEADLESS, args=BROWSER_ARGS)
         except Exception as e:
             log(f"Browser launch failed: {e}", "ERROR")
@@ -161,10 +145,6 @@ async def send_all_messages():
         await browser.close()
         log("All message cycles completed.")
 
-
-# ======================================================
-# FOREVER LOOP
-# ======================================================
 async def forever_loop():
     while True:
         try:
@@ -181,7 +161,6 @@ async def forever_loop():
             state["errors"] += 1
             await asyncio.sleep(RESTART_DELAY)
 
-
 def async_runner():
     try:
         log("Async runner starting...")
@@ -189,10 +168,6 @@ def async_runner():
     except Exception as e:
         log(f"Async loop crashed: {e}", "ERROR")
 
-
-# ======================================================
-# SELF-PING
-# ======================================================
 def self_ping():
     while True:
         if SELF_URL:
@@ -203,10 +178,6 @@ def self_ping():
                 log("Self-ping failed.", "WARN")
         time.sleep(300)
 
-
-# ======================================================
-# MAIN
-# ======================================================
 if __name__ == "__main__":
     threading.Thread(target=async_runner, daemon=True).start()
     threading.Thread(target=self_ping, daemon=True).start()
