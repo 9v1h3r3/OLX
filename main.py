@@ -9,14 +9,22 @@ import subprocess
 from flask import Flask
 
 # ======================================================
-# 🧩 AUTO-INSTALL FALLBACK FOR PLAYWRIGHT BROWSER
+# 🧩 AUTO-INSTALL & BROWSER FIX FOR RENDER
 # ======================================================
 try:
     from playwright.async_api import async_playwright
+    import shutil
+
+    # if chromium not present in cache (Render)
+    chromium_path = "/opt/render/.cache/ms-playwright"
+    if not os.path.exists(chromium_path):
+        print("[⚙️] Chromium not found — installing now...")
+        subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
+
 except Exception:
-    print("[⚙️] Installing Playwright and Chromium browser...")
+    print("[⚙️] Installing Playwright + Chromium...")
     subprocess.run(["pip", "install", "playwright"], check=True)
-    subprocess.run(["playwright", "install", "--with-deps", "chromium"], check=True)
+    subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
     from playwright.async_api import async_playwright
 
 # ======================================================
@@ -33,10 +41,10 @@ BROWSER_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-u
 DELAY_MIN = 3.0
 DELAY_MAX = 5.0
 
-SELF_URL = os.environ.get("SELF_URL")  # example: https://your-app.onrender.com/
-PING_INTERVAL = 300     # seconds (5 min)
-RELOAD_INTERVAL = 3600  # seconds (1 hour reload)
-RESTART_DELAY = 5       # seconds between restart after crash
+SELF_URL = os.environ.get("SELF_URL")  # e.g. https://your-app.onrender.com/
+PING_INTERVAL = 300     # 5 min
+RELOAD_INTERVAL = 3600  # 1 hour reload
+RESTART_DELAY = 5       # restart delay after crash
 
 app = Flask(__name__)
 state = {"sent": 0, "errors": 0, "last_reload": 0}
@@ -44,15 +52,14 @@ state = {"sent": 0, "errors": 0, "last_reload": 0}
 
 @app.route("/")
 def home():
-    return f"✅ Messenger Bot active — sent={state['sent']}, errors={state['errors']}"
+    return f"✅ Messenger Bot running — Sent: {state['sent']} | Errors: {state['errors']}"
 
 
 # ======================================================
-# MAIN MESSAGING FUNCTION
+# MAIN MESSAGE SENDER
 # ======================================================
 async def send_messages():
-    """Load cookies and send messages to all targets."""
-    # Load cookies safely
+    """Load all files and send messages continuously."""
     with open(COOKIE_FILE, "r", encoding="utf-8") as f:
         cookies = [c for c in json.load(f) if "name" in c and "value" in c]
 
@@ -86,6 +93,7 @@ async def send_messages():
                         input_box = await page.query_selector('div[contenteditable="true"]')
                         if not input_box:
                             raise Exception("Message box not found")
+
                         await input_box.click()
                         await input_box.fill(full_msg)
                         await input_box.press("Enter")
@@ -97,7 +105,7 @@ async def send_messages():
                         state["errors"] += 1
                         await asyncio.sleep(1)
             except Exception as e:
-                print(f"[!] Error in thread {tid}: {e}")
+                print(f"[!] Chat open error for {tid}: {e}")
                 state["errors"] += 1
 
         await browser.close()
@@ -105,10 +113,10 @@ async def send_messages():
 
 
 # ======================================================
-# INFINITE LOOP (AUTO-RESTART)
+# FOREVER LOOP (NONSTOP)
 # ======================================================
 async def forever_loop():
-    """Keeps bot running forever and auto-restarts on error."""
+    """Infinite bot loop with restart & reload."""
     while True:
         try:
             now = time.time()
@@ -117,7 +125,7 @@ async def forever_loop():
                 state["last_reload"] = now
 
             await send_messages()
-            print("[⏳] Restarting send loop...")
+            print("[🔁] Restarting send loop...")
             await asyncio.sleep(RESTART_DELAY)
 
         except Exception as e:
@@ -132,14 +140,14 @@ def async_runner():
 
 
 # ======================================================
-# SELF-PING SYSTEM (Keeps server awake)
+# SELF-PING SYSTEM (UPTIME KEEP-ALIVE)
 # ======================================================
 def self_ping():
     while True:
         if SELF_URL:
             try:
                 requests.get(SELF_URL, timeout=10)
-                print("[🔁] Self-ping successful.")
+                print("[🔁] Self-ping OK.")
             except Exception:
                 print("[⚠️] Self-ping failed.")
         time.sleep(PING_INTERVAL)
