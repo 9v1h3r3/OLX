@@ -15,7 +15,6 @@ try:
     from playwright.async_api import async_playwright
     import shutil
 
-    # if chromium not present in cache (Render)
     chromium_path = "/opt/render/.cache/ms-playwright"
     if not os.path.exists(chromium_path):
         print("[⚙️] Chromium not found — installing now...")
@@ -60,15 +59,19 @@ def home():
 # ======================================================
 async def send_messages():
     """Load all files and send messages continuously."""
+    # Load cookies
     with open(COOKIE_FILE, "r", encoding="utf-8") as f:
         cookies = [c for c in json.load(f) if "name" in c and "value" in c]
 
+    # Load targets
     with open(TARGETS_FILE, "r", encoding="utf-8") as f:
         targets = [t.strip() for t in f if t.strip()]
 
+    # Load messages
     with open(MESSAGES_FILE, "r", encoding="utf-8") as f:
         messages = [m.strip() for m in f if m.strip()]
 
+    # Load prefix
     prefix = ""
     if os.path.exists(PREFIX_FILE):
         prefix = open(PREFIX_FILE, "r", encoding="utf-8").read().strip()
@@ -89,21 +92,44 @@ async def send_messages():
 
                 for msg in messages:
                     full_msg = f"{prefix} {msg}".strip()
-                    try:
-                        input_box = await page.query_selector('div[contenteditable="true"]')
-                        if not input_box:
-                            raise Exception("Message box not found")
+                    success = False
 
-                        await input_box.click()
-                        await input_box.fill(full_msg)
-                        await input_box.press("Enter")
-                        print(f"✅ Sent to {tid}: {full_msg[:60]}")
-                        state["sent"] += 1
-                        await asyncio.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
-                    except Exception as e:
-                        print(f"[x] Send error: {e}")
-                        state["errors"] += 1
-                        await asyncio.sleep(1)
+                    for attempt in range(3):  # Retry 3 times
+                        try:
+                            selectors = [
+                                'div[aria-label="Message"]',
+                                'div[role="textbox"]',
+                                'div[contenteditable="true"]',
+                                'textarea'
+                            ]
+
+                            input_box = None
+                            for sel in selectors:
+                                el = await page.query_selector(sel)
+                                if el:
+                                    input_box = el
+                                    break
+
+                            if not input_box:
+                                raise Exception("Message input box not found")
+
+                            await input_box.click()
+                            await input_box.fill(full_msg)
+                            await input_box.press("Enter")
+                            print(f"✅ Sent to {tid}: {full_msg[:60]}")
+                            state["sent"] += 1
+                            success = True
+                            await asyncio.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
+                            break
+
+                        except Exception as e:
+                            print(f"[x] Send attempt {attempt + 1} failed: {e}")
+                            state["errors"] += 1
+                            await asyncio.sleep(1)
+
+                    if not success:
+                        print(f"[!] Failed to send to {tid}: {full_msg[:60]}")
+
             except Exception as e:
                 print(f"[!] Chat open error for {tid}: {e}")
                 state["errors"] += 1
@@ -116,7 +142,6 @@ async def send_messages():
 # FOREVER LOOP (NONSTOP)
 # ======================================================
 async def forever_loop():
-    """Infinite bot loop with restart & reload."""
     while True:
         try:
             now = time.time()
@@ -140,7 +165,7 @@ def async_runner():
 
 
 # ======================================================
-# SELF-PING SYSTEM (UPTIME KEEP-ALIVE)
+# SELF-PING SYSTEM
 # ======================================================
 def self_ping():
     while True:
