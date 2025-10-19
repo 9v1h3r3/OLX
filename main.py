@@ -10,10 +10,9 @@ from flask import Flask
 from datetime import datetime
 
 # ======================================================
-# 🧩 BUILD-TIME CHROMIUM CHECK
+# 🧩 BUILD-TIME CHROMIUM INSTALL
 # ======================================================
 chromium_cache_path = "/opt/render/.cache/ms-playwright/chromium"
-
 if not os.path.exists(chromium_cache_path):
     print(f"[{datetime.now()}] [⚙️] Chromium not found — installing...", flush=True)
     subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
@@ -40,6 +39,7 @@ RELOAD_INTERVAL = 3600
 RESTART_DELAY = 5
 
 SELF_URL = os.environ.get("SELF_URL")
+IS_DEPLOY = os.environ.get("RENDER", "false").lower() == "true"
 
 app = Flask(__name__)
 state = {"sent": 0, "errors": 0, "last_reload": 0}
@@ -128,6 +128,10 @@ async def send_messages_to_chat(tid, page, messages, prefix):
 # SEND MESSAGES TO ALL CHATS (PARALLEL)
 # ======================================================
 async def send_all_messages():
+    if not IS_DEPLOY:
+        log("⚠️ Build phase detected — messages will NOT be sent", "WARN")
+        return
+
     log("Loading cookies, targets, messages...")
 
     # Load cookies
