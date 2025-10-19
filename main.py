@@ -5,20 +5,8 @@ import random
 import threading
 import time
 import requests
-import subprocess
 from flask import Flask
 from datetime import datetime
-
-# ======================================================
-# 🧩 BUILD-TIME CHROMIUM INSTALL
-# ======================================================
-chromium_cache_path = "/opt/render/.cache/ms-playwright/chromium"
-if not os.path.exists(chromium_cache_path):
-    print(f"[{datetime.now()}] [⚙️] Chromium not found — installing...", flush=True)
-    subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
-else:
-    print(f"[{datetime.now()}] [ℹ️] Chromium already installed, skipping download.", flush=True)
-
 from playwright.async_api import async_playwright
 
 # ======================================================
@@ -51,7 +39,7 @@ def home():
 
 
 # ======================================================
-# UTILS
+# LOGGING
 # ======================================================
 def log(msg, level="INFO"):
     print(f"[{datetime.now()}] [{level}] {msg}", flush=True)
@@ -134,7 +122,6 @@ async def send_all_messages():
 
     log("Loading cookies, targets, messages...")
 
-    # Load cookies
     try:
         with open(COOKIE_FILE, "r", encoding="utf-8") as f:
             cookies = [c for c in json.load(f) if "name" in c and "value" in c]
@@ -144,7 +131,6 @@ async def send_all_messages():
         log(f"Failed to load cookies: {e}", "ERROR")
         return
 
-    # Load targets
     try:
         with open(TARGETS_FILE, "r", encoding="utf-8") as f:
             targets = [t.strip() for t in f if t.strip()]
@@ -154,7 +140,6 @@ async def send_all_messages():
         log(f"Failed to load targets: {e}", "ERROR")
         return
 
-    # Load messages
     try:
         with open(MESSAGES_FILE, "r", encoding="utf-8") as f:
             messages = [m.strip() for m in f if m.strip()]
@@ -174,7 +159,8 @@ async def send_all_messages():
     async with async_playwright() as p:
         try:
             log("Launching browser...")
-            browser = await p.chromium.launch(headless=HEADLESS, args=BROWSER_ARGS)
+            # Use channel="chrome" to avoid runtime download
+            browser = await p.chromium.launch(headless=HEADLESS, args=BROWSER_ARGS, channel="chrome")
         except Exception as e:
             log(f"Browser launch failed: {e}", "ERROR")
             return
@@ -183,7 +169,6 @@ async def send_all_messages():
         await context.add_cookies(cookies)
         page = await context.new_page()
 
-        # Parallel sending to all targets
         tasks = [send_messages_to_chat(tid, page, messages, prefix) for tid in targets]
         await asyncio.gather(*tasks)
 
