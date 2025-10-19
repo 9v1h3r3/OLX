@@ -129,7 +129,7 @@ async def send_all_messages():
     async with async_playwright() as p:
         try:
             log("Launching browser...")
-            # ✅ Bundled Chromium used, no channel
+            # ✅ Bundled Chromium, no channel param
             browser = await p.chromium.launch(headless=HEADLESS, args=BROWSER_ARGS)
         except Exception as e:
             log(f"Browser launch failed: {e}", "ERROR")
