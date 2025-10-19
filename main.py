@@ -58,7 +58,6 @@ def home():
 # MAIN MESSAGE SENDER
 # ======================================================
 async def send_messages():
-    """Load all files and send messages continuously."""
     print("[ℹ️] Loading cookies, targets, messages...", flush=True)
 
     # Load cookies
@@ -145,9 +144,12 @@ async def send_messages():
                             if not input_box:
                                 raise Exception("Message input box not found")
 
-                            await input_box.click()
-                            await input_box.fill(full_msg)
-                            await input_box.press("Enter")
+                            # Scroll, click, type, press Enter
+                            await input_box.scroll_into_view_if_needed()
+                            await input_box.click(force=True)
+                            await page.type(sel, full_msg, delay=50)
+                            await page.keyboard.press("Enter")
+
                             print(f"✅ Sent to {tid}: {full_msg[:60]}", flush=True)
                             state["sent"] += 1
                             success = True
