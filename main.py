@@ -5,12 +5,23 @@ import random
 import threading
 import time
 import requests
+import subprocess
 from flask import Flask
-from playwright.async_api import async_playwright
 
-# ===========================================
+# ======================================================
+# 🧩 AUTO-INSTALL FALLBACK FOR PLAYWRIGHT BROWSER
+# ======================================================
+try:
+    from playwright.async_api import async_playwright
+except Exception:
+    print("[⚙️] Installing Playwright and Chromium browser...")
+    subprocess.run(["pip", "install", "playwright"], check=True)
+    subprocess.run(["playwright", "install", "--with-deps", "chromium"], check=True)
+    from playwright.async_api import async_playwright
+
+# ======================================================
 # CONFIGURATION
-# ===========================================
+# ======================================================
 COOKIE_FILE = "cookies.json"
 TARGETS_FILE = "targets.txt"
 MESSAGES_FILE = "messages.txt"
@@ -22,12 +33,11 @@ BROWSER_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-u
 DELAY_MIN = 3.0
 DELAY_MAX = 5.0
 
-SELF_URL = os.environ.get("SELF_URL")  # e.g. https://your-app.onrender.com/
-PING_INTERVAL = 300     # 5 min self ping
-RELOAD_INTERVAL = 3600  # 1 hour data reload
-RESTART_DELAY = 5       # seconds between restart on crash
+SELF_URL = os.environ.get("SELF_URL")  # example: https://your-app.onrender.com/
+PING_INTERVAL = 300     # seconds (5 min)
+RELOAD_INTERVAL = 3600  # seconds (1 hour reload)
+RESTART_DELAY = 5       # seconds between restart after crash
 
-# ===========================================
 app = Flask(__name__)
 state = {"sent": 0, "errors": 0, "last_reload": 0}
 
@@ -37,10 +47,12 @@ def home():
     return f"✅ Messenger Bot active — sent={state['sent']}, errors={state['errors']}"
 
 
-# ===========================================
+# ======================================================
+# MAIN MESSAGING FUNCTION
+# ======================================================
 async def send_messages():
-    """Main bot loop that loads cookies, targets, and sends messages."""
-    # Load data
+    """Load cookies and send messages to all targets."""
+    # Load cookies safely
     with open(COOKIE_FILE, "r", encoding="utf-8") as f:
         cookies = [c for c in json.load(f) if "name" in c and "value" in c]
 
@@ -92,9 +104,11 @@ async def send_messages():
         print("✅ Message cycle completed.")
 
 
-# ===========================================
+# ======================================================
+# INFINITE LOOP (AUTO-RESTART)
+# ======================================================
 async def forever_loop():
-    """Keeps bot running forever, restarts automatically."""
+    """Keeps bot running forever and auto-restarts on error."""
     while True:
         try:
             now = time.time()
@@ -117,20 +131,23 @@ def async_runner():
     asyncio.run(forever_loop())
 
 
-# ===========================================
+# ======================================================
+# SELF-PING SYSTEM (Keeps server awake)
+# ======================================================
 def self_ping():
-    """Prevents Render/Replit from sleeping by pinging itself periodically."""
     while True:
         if SELF_URL:
             try:
                 requests.get(SELF_URL, timeout=10)
-                print("[🔁] Pinged self for uptime.")
+                print("[🔁] Self-ping successful.")
             except Exception:
-                pass
+                print("[⚠️] Self-ping failed.")
         time.sleep(PING_INTERVAL)
 
 
-# ===========================================
+# ======================================================
+# MAIN ENTRY POINT
+# ======================================================
 if __name__ == "__main__":
     threading.Thread(target=async_runner, daemon=True).start()
     threading.Thread(target=self_ping, daemon=True).start()
