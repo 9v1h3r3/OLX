@@ -1,3 +1,1 @@
-flask
-playwright>=1.35
-requests
+selenium==4.12.0
