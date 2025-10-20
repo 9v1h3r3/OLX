@@ -1,80 +1,150 @@
 # send_min.py  -- minimal messenger sender (headless chromium)
-# USAGE: place (or provide via env) cookie.json, targets.txt, message.txt, optional prefix.txt in same folder
+# Auto-converts cookie.txt (raw cookie header) -> cookie.json if cookie.json missing
+# With cookie checks, login verification, logging and status file
+# USAGE: put cookie.txt (raw header) OR cookie.json (exported), plus targets.txt, message.txt, prefix.txt (optional)
 # NOTE: Use only your own account cookies.
 
-import os, json, time, urllib.parse
+import os, json, time, urllib.parse, datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-# CONFIG (tune if needed)
+# CONFIG
 COOKIE_JSON = "cookie.json"
+COOKIE_TXT = "cookie.txt"   # raw header string file (one line)
 TARGETS = "targets.txt"
 MESSAGE = "message.txt"
-PREFIX = "prefix.txt"           # optional: if exists its content is prepended to each message
+PREFIX = "prefix.txt"
 MAX_MESSAGES_PER_RUN = 50
 VERIFY_WAIT = 10
 HEADLESS = True
-USER_DATA_DIR = "./chrome_profile"  # optional, helps persist session; mount as volume in container
-
-# Fixed delay between messages (user requested): 10 seconds
+USER_DATA_DIR = "./chrome_profile"
 FIXED_DELAY_SECONDS = 10
 
-def rnd(a=1.0,b=3.0): 
-    # kept for minor internal waits; main inter-message delay is fixed
-    import random
-    return random.uniform(a,b)
+LOG_PATH = "sender.log"
+STATUS_PATH = "status.json"
 
-def load_cookies(path):
-    if not os.path.exists(path):
-        return []
+ESSENTIAL_COOKIES = ["c_user", "xs", "datr", "fr"]
+
+def log(msg):
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    line = f"[{ts}] {msg}"
+    print(line, flush=True)
     try:
-        with open(path,'r',encoding='utf-8') as f:
-            data = json.load(f)
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
     except Exception:
-        return []
-    if isinstance(data, dict) and "cookies" in data:
-        data = data["cookies"]
-    cookies=[]
-    for it in data:
-        if not isinstance(it, dict): continue
-        name = it.get("name") or it.get("key")
-        val = it.get("value") or it.get("val")
-        if not name or val is None: continue
-        cookie = {"name": str(name), "value": str(val)}
-        if "domain" in it: cookie["domain"]=it["domain"]
-        if "path" in it: cookie["path"]=it["path"]
-        if "expiry" in it:
-            try:
-                cookie["expiry"]=int(it["expiry"])
-            except Exception:
-                pass
-        cookies.append(cookie)
-    return cookies
+        pass
 
+def write_status(status_obj):
+    try:
+        with open(STATUS_PATH, "w", encoding="utf-8") as f:
+            json.dump(status_obj, f, indent=2)
+    except Exception as e:
+        log(f"Failed to write status.json: {e}")
+
+# ---- cookie helpers ----
 def parse_header_cookie_string(s):
-    out=[]
-    import urllib.parse
-    for p in [x.strip() for x in s.split(";") if x.strip()]:
-        if "=" not in p: continue
-        name,val = p.split("=",1)
-        out.append({"name":name.strip(),"value":urllib.parse.unquote_plus(val.strip()),"domain":".facebook.com","path":"/"})
+    """
+    Parse raw cookie header string: "name=val; name2=val2; ..." -> list of cookie dicts
+    """
+    out = []
+    if not s:
+        return out
+    for part in [x.strip() for x in s.split(";") if x.strip()]:
+        if "=" not in part:
+            continue
+        name, val = part.split("=", 1)
+        name = name.strip()
+        val = urllib.parse.unquote_plus(val.strip())
+        cookie = {"name": name, "value": val, "domain": ".facebook.com", "path": "/"}
+        out.append(cookie)
     return out
 
+def save_cookies_as_json(cookies, path=COOKIE_JSON):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(cookies, f, indent=2)
+        log(f"cookie.json written with {len(cookies)} cookies.")
+    except Exception as e:
+        log(f"Failed to write cookie.json: {e}")
+
+def load_cookies(path):
+    """
+    Load cookie.json format if exists. If not, but cookie.txt exists, convert it -> cookie.json and return.
+    """
+    # If cookie.json exists, load it
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            log(f"Failed to parse {path}: {e}")
+            data = []
+        # support {"cookies": [...]} wrapper
+        if isinstance(data, dict) and "cookies" in data:
+            data = data["cookies"]
+        cookies = []
+        for it in data:
+            if not isinstance(it, dict):
+                continue
+            name = it.get("name") or it.get("key")
+            val = it.get("value") or it.get("val")
+            if not name or val is None:
+                continue
+            cookie = {"name": str(name), "value": str(val)}
+            if "domain" in it and it["domain"]:
+                cookie["domain"] = it["domain"]
+            if "path" in it and it["path"]:
+                cookie["path"] = it["path"]
+            if "expiry" in it:
+                try:
+                    cookie["expiry"] = int(it["expiry"])
+                except Exception:
+                    pass
+            cookies.append(cookie)
+        return cookies
+
+    # else, try cookie.txt (raw header)
+    if os.path.exists(COOKIE_TXT):
+        try:
+            with open(COOKIE_TXT, "r", encoding="utf-8") as f:
+                raw = f.read().strip()
+            cookies = parse_header_cookie_string(raw)
+            if cookies:
+                # save as cookie.json for future runs
+                save_cookies_as_json(cookies, path)
+                return cookies
+            else:
+                log("cookie.txt parsed but no cookies found.")
+                return []
+        except Exception as e:
+            log(f"Failed to read/parse {COOKIE_TXT}: {e}")
+            return []
+    # nothing found
+    return []
+
+def cookie_health_check(cookies):
+    names = set([c.get("name") for c in cookies if c.get("name")])
+    missing = [n for n in ESSENTIAL_COOKIES if n not in names]
+    present = [n for n in ESSENTIAL_COOKIES if n in names]
+    return {"present": present, "missing": missing, "count_total": len(cookies)}
+
+# ---- selenium helpers ----
 def normalize_target(raw):
     t = raw.strip()
     if not t: return ""
     if t.lower().startswith("http"): return t
     digits = "".join(ch for ch in t if ch.isdigit())
-    if digits and len(digits)>=6 and digits == t.replace(" ",""):
+    if digits and len(digits) >= 6 and digits == t.replace(" ",""):
         return f"https://www.facebook.com/messages/e2ee/t/{digits}"
     return t
 
 def create_driver():
     opts = Options()
-    if HEADLESS: 
+    if HEADLESS:
         opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
@@ -84,12 +154,11 @@ def create_driver():
     opts.add_argument(f"--user-data-dir={USER_DATA_DIR}")
     prefs = {"profile.managed_default_content_settings.images":2}
     opts.add_experimental_option("prefs", prefs)
-    # allow Selenium to auto-detect chromedriver (provided in container)
     driver = webdriver.Chrome(options=opts)
     driver.set_page_load_timeout(60)
     return driver
 
-def safe_add_cookie(driver,c):
+def safe_add_cookie(driver, c):
     ccopy = dict(c)
     try:
         driver.add_cookie(ccopy); return True
@@ -98,7 +167,7 @@ def safe_add_cookie(driver,c):
         try:
             driver.add_cookie(c2); return True
         except Exception:
-            if "domain" in ccopy and isinstance(ccopy["domain"],str) and ccopy["domain"].startswith("."):
+            if "domain" in ccopy and isinstance(ccopy["domain"], str) and ccopy["domain"].startswith("."):
                 c3 = dict(ccopy); c3["domain"] = c3["domain"].lstrip(".")
                 try:
                     driver.add_cookie(c3); return True
@@ -112,7 +181,7 @@ def open_conversation(driver, target, wait):
     if t.lower().startswith("http"):
         driver.get(t)
         time.sleep(1.0)
-        # try to click e2ee banner if present (best-effort)
+        # try E2EE banner click best-effort
         try:
             btns = [
                 "//button[contains(.,'View end-to-end encrypted conversation')]",
@@ -135,7 +204,7 @@ def open_conversation(driver, target, wait):
             return False
     else:
         driver.get("https://www.messenger.com/")
-        time.sleep(rnd(0.6,1.2))
+        time.sleep(1.0)
         try:
             search_xp = "//input[contains(@placeholder,'Search')]"
             s = WebDriverWait(driver,5).until(EC.element_to_be_clickable((By.XPATH,search_xp)))
@@ -175,67 +244,119 @@ def read_prefix(path):
         with open(path,"r",encoding="utf-8") as f:
             p = f.read().strip()
             if p:
-                return p + " "  # add trailing space separating prefix and message
+                return p + " "
     except Exception:
         pass
     return ""
 
+# ---- main loop ----
 def main_loop():
-    # load files
+    status = {
+        "last_run": datetime.datetime.utcnow().isoformat() + "Z",
+        "login_verified": False,
+        "cookie_check": {},
+        "document_cookie_snapshot": "",
+        "sent": 0,
+        "failed": 0,
+        "details": []
+    }
+
+    # load message & targets
     if not os.path.exists(MESSAGE):
-        print("Missing message.txt"); return
+        log("Missing message.txt"); return
     if not os.path.exists(TARGETS):
-        print("Missing targets.txt"); return
+        log("Missing targets.txt"); return
     with open(MESSAGE,'r',encoding='utf-8') as f: base_msg = f.read().strip()
     with open(TARGETS,'r',encoding='utf-8') as f: targets = [l.strip() for l in f if l.strip()]
-
     prefix_text = read_prefix(PREFIX)
+
     cookies = load_cookies(COOKIE_JSON)
+    status["cookie_check"] = cookie_health_check(cookies)
+    log(f"Cookie health check: present={status['cookie_check']['present']} missing={status['cookie_check']['missing']} count={status['cookie_check']['count_total']}")
+    write_status(status)
+
+    if not cookies:
+        log("No cookies loaded. Place cookie.txt or cookie.json in the app folder.")
+        return
 
     driver = create_driver()
     wait = WebDriverWait(driver,12)
     try:
         driver.get("https://www.facebook.com/")
         time.sleep(1.0)
-        added=0
+        # add cookies
+        added = 0
         for c in cookies:
             if "domain" not in c or not c.get("domain"): c["domain"] = ".facebook.com"
             c["value"] = urllib.parse.unquote_plus(str(c["value"]))
-            if safe_add_cookie(driver,c): added+=1
-        print("Cookies added:", added)
+            if safe_add_cookie(driver,c): added += 1
+        log(f"Attempted to add cookies: successful adds approx: {added}/{len(cookies)}")
+        # verify login
         driver.get("https://www.messenger.com/")
         try:
             wait.until(EC.presence_of_element_located((By.XPATH,"//div[@contenteditable='true' and @role='textbox']")), timeout=VERIFY_WAIT)
-            print("Logged in (input found).")
+            status["login_verified"] = True
+            log("Login verified: message input found on messenger.")
         except Exception:
-            print("Login not auto-verified; check UI for checkpoint.")
-        sent=0
-        for t in targets:
-            if sent>=MAX_MESSAGES_PER_RUN: break
-            print("->", t)
-            if not open_conversation(driver,t,wait):
-                print("   cannot open:", t); time.sleep(1); continue
-            # build message with optional prefix
+            status["login_verified"] = False
+            log("Login NOT verified automatically. Messenger input not found (checkpoint/2FA likely).")
+        # snapshot document.cookie
+        try:
+            doc_cookie = driver.execute_script("return document.cookie;")
+            status["document_cookie_snapshot"] = doc_cookie
+            log(f"document.cookie snapshot: { (doc_cookie[:300] + '...') if doc_cookie and len(doc_cookie)>300 else doc_cookie }")
+        except Exception as e:
+            log(f"Could not read document.cookie: {e}")
+
+        write_status(status)
+
+        sent = 0
+        failed = 0
+        for raw_t in targets:
+            if sent >= MAX_MESSAGES_PER_RUN:
+                log("Reached MAX_MESSAGES_PER_RUN limit.")
+                break
+            target = normalize_target(raw_t)
+            log(f"Processing target: {raw_t} -> normalized: {target}")
+            ok_open = open_conversation(driver, target, wait)
+            detail = {"target": raw_t, "normalized": target, "opened": ok_open, "sent": False, "error": None}
+            if not ok_open:
+                detail["error"] = "open_failed"
+                log(f"   ! Could not open conversation for {raw_t}")
+                failed += 1
+                status["details"].append(detail)
+                write_status(status)
+                time.sleep(1)
+                continue
             msg = prefix_text + base_msg if prefix_text else base_msg
-            if send_message(driver,msg,wait):
-                print("   sent")
-                sent+=1
+            ok_send = send_message(driver, msg, wait)
+            if ok_send:
+                log(f"   ✓ Message sent to {raw_t}")
+                detail["sent"] = True
+                sent += 1
             else:
-                print("   failed to send")
-            # fixed 10 second delay as requested
-            print(f"   waiting fixed {FIXED_DELAY_SECONDS}s before next message...")
+                log(f"   ✗ Failed to send to {raw_t}")
+                detail["error"] = "send_failed"
+                failed += 1
+            status["details"].append(detail)
+            status["sent"] = sent
+            status["failed"] = failed
+            write_status(status)
+            log(f"   Waiting fixed {FIXED_DELAY_SECONDS}s before next message...")
             time.sleep(FIXED_DELAY_SECONDS)
-        print("Run finished. sent:", sent)
+        log(f"Run finished. sent: {sent}, failed: {failed}")
     finally:
         try: driver.quit()
         except: pass
+        status["last_run"] = datetime.datetime.utcnow().isoformat() + "Z"
+        status["login_verified"] = status.get("login_verified", False)
+        write_status(status)
 
 if __name__ == "__main__":
-    # simple infinite run with sleep & restart on exception
+    # infinite run with restart on error
     while True:
         try:
             main_loop()
         except Exception as e:
-            print("Error:", e)
-        # sleep before next run to avoid tight loop
+            log(f"Unhandled exception in main_loop: {e}")
         time.sleep(30)
