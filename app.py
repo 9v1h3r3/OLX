@@ -263,5 +263,9 @@ def api_logs():
     lines = text.splitlines()[-200:]
     return jsonify({'ok': True, 'lines': lines})
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", 8080))
+    secret = os.environ.get("FLASK_SECRET_KEY", "change-this-secret")
+    app.secret_key = secret
+    app.run(host="0.0.0.0", port=port)
