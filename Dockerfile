@@ -1,21 +1,25 @@
-# Use Playwright image that already bundles browsers (recommended)
-FROM mcr.microsoft.com/playwright/python:latest
+# ✅ Use the exact Playwright version that matches your library (1.55.0)
+FROM mcr.microsoft.com/playwright/python:v1.55.0-jammy
 
+# Set working directory
 WORKDIR /app
 
-# copy requirements and install
+# Copy dependency list and install them
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# copy app
+# ✅ Ensure browsers are properly installed
+RUN playwright install --with-deps chromium
+
+# Copy all project files
 COPY . /app
 
-# ensure python output is unbuffered (logs show in Render)
+# Make sure Python output is visible in Render logs
 ENV PYTHONUNBUFFERED=1
-# Use PORT env variable Render provides
+# Render injects PORT automatically
 ENV PORT=8080
 
 EXPOSE 8080
 
-# Run the flask app (app.py should respect $PORT environment variable)
+# ✅ Start the app
 CMD ["python", "app.py"]
