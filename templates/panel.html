@@ -1,0 +1,162 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Messenger Bot — Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="header">
+      <h1>Messenger Bot</h1>
+      {% if user %}
+      <form id="logoutForm" method="POST" action="/logout">
+        <button class="btn secondary">Logout ({{ user }})</button>
+      </form>
+      {% endif %}
+    </header>
+
+    <main>
+      {% if not user %}
+      <div class="card center">
+        <h2>Login</h2>
+        <form id="loginForm" method="POST" action="/login">
+          <input name="username" placeholder="username" required />
+          <input name="password" type="password" placeholder="password" required />
+          <div class="row">
+            <button class="btn primary">Login</button>
+          </div>
+        </form>
+        <p class="muted">Sample users are in <code>data/users.json</code></p>
+      </div>
+      {% else %}
+
+      <div class="grid">
+        <section class="card">
+          <h3>Cookies</h3>
+          <textarea id="cookiesText" placeholder="Paste cookies JSON / Netscape / header"></textarea>
+          <div class="row">
+            <button class="btn" id="convertBtn">Convert</button>
+            <button class="btn" id="downloadBtn" disabled>Download Converted</button>
+          </div>
+          <h4>Converted preview</h4>
+          <pre id="convertedPreview" class="preview">No cookies converted yet.</pre>
+        </section>
+
+        <section class="card">
+          <h3>Campaign</h3>
+          <label>Prefix</label>
+          <input id="prefix" placeholder="Optional prefix" />
+          <label>Messages (one per line)</label>
+          <textarea id="messages" placeholder="Hello\nHow are you?"></textarea>
+          <label>Targets (thread IDs or message URLs — one per line)</label>
+          <textarea id="targets" placeholder="1000123456789\nhttps://www.facebook.com/messages/t/1000123456789"></textarea>
+
+          <div class="row">
+            <button class="btn primary" id="startBtn">Start</button>
+            <button class="btn danger" id="stopBtn">Stop</button>
+          </div>
+
+          <div class="mt-3">
+            <strong>Status:</strong> <span id="statusText">idle</span>
+          </div>
+        </section>
+
+        <section class="card logs">
+          <h3>Logs</h3>
+          <div id="logsBox" class="logs-box">No logs yet.</div>
+          <div class="row mt-2">
+            <button class="btn" id="refreshLogs">Refresh Logs</button>
+            <button class="btn" id="clearLogs">Clear Logs</button>
+          </div>
+        </section>
+      </div>
+
+      {% endif %}
+    </main>
+
+    <footer class="muted">Logs path: <code>data/logs/&lt;user&gt;.log</code></footer>
+  </div>
+
+  <script>
+  async function postJSON(url, body){
+    const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    return res.json();
+  }
+
+  document.addEventListener('DOMContentLoaded', ()=>{
+    const convertBtn = document.getElementById('convertBtn');
+    const cookiesText = document.getElementById('cookiesText');
+    const convertedPreview = document.getElementById('convertedPreview');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const statusText = document.getElementById('statusText');
+    const logsBox = document.getElementById('logsBox');
+    const refreshLogs = document.getElementById('refreshLogs');
+    const clearLogs = document.getElementById('clearLogs');
+
+    convertBtn?.addEventListener('click', async ()=>{
+      convertedPreview.textContent = 'Converting...';
+      const text = cookiesText.value;
+      try{
+        const res = await fetch('/api/convert_cookies', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text})});
+        const j = await res.json();
+        if(!j.ok){ convertedPreview.textContent = 'Parse error'; return; }
+        window._converted = j.cookies;
+        convertedPreview.textContent = JSON.stringify(j.cookies, null, 2);
+        downloadBtn.disabled = false;
+      }catch(e){ convertedPreview.textContent = 'Error converting'; }
+    });
+
+    downloadBtn?.addEventListener('click', ()=>{
+      if(!window._converted) return;
+      const blob = new Blob([JSON.stringify(window._converted, null, 2)], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'playwright-cookies.json'; a.click(); URL.revokeObjectURL(url);
+    });
+
+    startBtn?.addEventListener('click', async ()=>{
+      if(!window._converted){ alert('Convert cookies first'); return; }
+      const payload = {
+        cookies: window._converted,
+        prefix: document.getElementById('prefix').value || '',
+        messages: document.getElementById('messages').value.split('\n'),
+        targets: document.getElementById('targets').value.split('\n')
+      };
+      statusText.textContent = 'starting...';
+      const res = await fetch('/api/start', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+      const j = await res.json();
+      if(j.ok){ statusText.textContent = 'running'; fetchLogs(); } else { statusText.textContent = 'error: '+(j.error||'') }
+    });
+
+    stopBtn?.addEventListener('click', async ()=>{
+      statusText.textContent = 'stopping...';
+      const res = await fetch('/api/stop', {method:'POST'});
+      const j = await res.json();
+      if(j.ok) statusText.textContent = 'stopped'; else statusText.textContent = 'error stopping';
+    });
+
+    async function fetchLogs(){
+      const res = await fetch('/api/logs');
+      const j = await res.json();
+      if(j.ok){ logsBox.textContent = j.lines.join('\n') || 'No logs yet.'; }
+    }
+
+    refreshLogs?.addEventListener('click', fetchLogs);
+    clearLogs?.addEventListener('click', async ()=>{
+      const r = await fetch('/api/logs'); const j = await r.json();
+      // To clear, we simply truncate the file via a POST to /api/clear-logs (not implemented). For now: ask user to delete file.
+      alert('To clear logs delete the file on server at data/logs/<user>.log');
+    });
+
+    // Poll status every 5s
+    setInterval(async ()=>{
+      const r = await fetch('/api/status'); const s = await r.json();
+      if(s.running) statusText.textContent = 'running'; else statusText.textContent = 'idle';
+    }, 5000);
+  });
+  </script>
+</body>
+</html>
