@@ -1,32 +1,21 @@
-# Dockerfile - small image with headless chromium + python
-FROM python:3.11-slim
+# Use Playwright image that already bundles browsers (recommended)
+FROM mcr.microsoft.com/playwright/python:latest
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Install chromium and chromedriver + minimal deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    chromium \
-    chromium-driver \
-    ca-certificates \
-    fonts-liberation \
-    wget \
-    unzip \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create app dir
 WORKDIR /app
-COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app files
-COPY send_min.py /app/
-COPY start.sh /app/
+# copy requirements and install
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# ensure chrome binary is in PATH for selenium to auto-detect
-ENV CHROME_BIN=/usr/bin/chromium
-ENV DISPLAY=:99
+# copy app
+COPY . /app
 
-RUN chmod +x /app/start.sh
+# ensure python output is unbuffered (logs show in Render)
+ENV PYTHONUNBUFFERED=1
+# Use PORT env variable Render provides
+ENV PORT=8080
 
-# default command
-CMD ["/app/start.sh"]
+EXPOSE 8080
+
+# Run the flask app (app.py should respect $PORT environment variable)
+CMD ["python", "app.py"]
